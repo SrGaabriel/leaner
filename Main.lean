@@ -5,6 +5,19 @@ open Cli
 open Leaner.Formatter
 open Leaner.Core
 
+partial def collectLeanFiles (path : System.FilePath) : IO (Array System.FilePath) := do
+  if path.components.any (· == ".lake") then
+    return #[]
+  if ← path.isDir then
+    let mut files := #[]
+    for entry in ← path.readDir do
+      files := files ++ (← collectLeanFiles entry.path)
+    return files
+  else if path.extension == some "lean" then
+    return #[path]
+  else
+    return #[]
+
 def loadConfig (width? : Option Nat) (indent? : Option Nat) : IO Config.FormatterConfig := do
   let baseConfig ← Config.loadConfigFromCwd
 
@@ -26,13 +39,17 @@ def formatHandler (p : Parsed) : IO UInt32 := do
   let mut hasError := false
   let mut changedCount := 0
 
+  let mut allFiles : Array System.FilePath := #[]
   for file in files do
     let path : System.FilePath := file
     if !(← path.pathExists) then
       IO.eprintln s!"Error: File not found: {file}"
       hasError := true
       continue
+    allFiles := allFiles ++ (← collectLeanFiles path)
 
+  for path in allFiles do
+    let file := path.toString
     let result ← formatFile path config
 
     for diag in result.diagnostics do
@@ -70,15 +87,18 @@ def checkHandler (p : Parsed) : IO UInt32 := do
 
   let mut needsFormat := false
 
+  let mut allFiles : Array System.FilePath := #[]
   for file in files do
     let path : System.FilePath := file
     if !(← path.pathExists) then
       IO.eprintln s!"Error: File not found: {file}"
       continue
+    allFiles := allFiles ++ (← collectLeanFiles path)
 
+  for path in allFiles do
     let result ← formatFile path config
     if result.changed then
-      IO.println s!"Would reformat: {file}"
+      IO.println s!"Would reformat: {path}"
       needsFormat := true
 
   if needsFormat then

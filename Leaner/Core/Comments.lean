@@ -43,25 +43,25 @@ def atEnd (source : String) (s : ScanState) : Bool :=
 
 def peek (source : String) (s : ScanState) : Option Char :=
   if atEnd source s then none
-  else some (source.get ⟨s.pos⟩)
+  else some (String.Pos.Raw.get source ⟨s.pos⟩)
 
 def peekNext (source : String) (s : ScanState) : Option Char :=
-  let nextPos := s.pos + (source.get ⟨s.pos⟩).utf8Size
+  let nextPos := s.pos + (String.Pos.Raw.get source ⟨s.pos⟩).utf8Size
   if nextPos >= source.utf8ByteSize then none
-  else some (source.get ⟨nextPos⟩)
+  else some (String.Pos.Raw.get source ⟨nextPos⟩)
 
 def peekAt (source : String) (s : ScanState) (offset : Nat) : Option Char := Id.run do
   let mut pos := s.pos
   for _ in [:offset] do
     if pos >= source.utf8ByteSize then return none
-    pos := pos + (source.get ⟨pos⟩).utf8Size
+    pos := pos + (String.Pos.Raw.get source ⟨pos⟩).utf8Size
   if pos >= source.utf8ByteSize then return none
-  return some (source.get ⟨pos⟩)
+  return some (String.Pos.Raw.get source ⟨pos⟩)
 
 def advanceChar (source : String) (s : ScanState) : ScanState :=
   if atEnd source s then s
   else
-    let c := source.get ⟨s.pos⟩
+    let c := String.Pos.Raw.get source ⟨s.pos⟩
     let nextPos := s.pos + c.utf8Size
     if c == '\n' then
       { s with pos := nextPos, line := s.line + 1, column := 1 }

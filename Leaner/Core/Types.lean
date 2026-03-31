@@ -31,12 +31,12 @@ def Position.fromRawPos (source : String) (pos : String.Pos.Raw) : Position := I
   let mut col := 1
   let mut i : String.Pos.Raw := ⟨0⟩
   while i < pos do
-    if source.get i == '\n' then
+    if String.Pos.Raw.get source i == '\n' then
       line := line + 1
       col := 1
     else
       col := col + 1
-    i := source.next i
+    i := String.Pos.Raw.next source i
   { line, column := col }
 
 def Position.toRawPos (source : String) (pos : Position) : String.Pos.Raw := Id.run do
@@ -45,12 +45,12 @@ def Position.toRawPos (source : String) (pos : Position) : String.Pos.Raw := Id.
   let mut i : String.Pos.Raw := ⟨0⟩
   let endPos := source.endPos.offset
   while i < endPos && (line < pos.line || (line == pos.line && col < pos.column)) do
-    if source.get i == '\n' then
+    if String.Pos.Raw.get source i == '\n' then
       line := line + 1
       col := 1
     else
       col := col + 1
-    i := source.next i
+    i := String.Pos.Raw.next source i
   i
 
 structure SourceFile where
