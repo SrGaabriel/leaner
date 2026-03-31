@@ -1,14 +1,22 @@
-name: Lean Action CI
+name: CI
 
 on:
   push:
+    branches:
+      - main
   pull_request:
+  merge_group:
   workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v4
       - uses: leanprover/lean-action@v1
+        with:
+          use-github-cache: true

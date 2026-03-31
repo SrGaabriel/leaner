@@ -1,0 +1,82 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' }}
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-linux
+            binary: leaner
+          - os: ubuntu-24.04-arm
+            target: aarch64-linux
+            binary: leaner
+          - os: macos-13
+            target: x86_64-darwin
+            binary: leaner
+          - os: macos-latest
+            target: aarch64-darwin
+            binary: leaner
+          - os: windows-latest
+            target: x86_64-windows
+            binary: leaner.exe
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: leanprover/lean-action@v1
+        with:
+          use-github-cache: true
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $leanPrefix = (lean --print-prefix).Trim()
+          $dll = "$leanPrefix\bin\libleanshared.dll"
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item ".lake\build\bin\leaner.exe" dist\
+          Copy-Item $dll dist\
+          Compress-Archive -Path dist\* -DestinationPath leaner-${{ matrix.target }}.zip
+
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          cp .lake/build/bin/leaner leaner-${{ matrix.target }}
+          chmod +x leaner-${{ matrix.target }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: leaner-${{ matrix.target }}
+          path: leaner-${{ matrix.target }}*
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+          path: artifacts
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/leaner-*
+          fail_on_unmatched_files: true
+          generate_release_notes: true
