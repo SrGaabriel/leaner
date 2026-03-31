@@ -43,14 +43,13 @@ jobs:
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
-        shell: pwsh
+        shell: bash
         run: |
-          $leanPrefix = (lean --print-prefix).Trim()
-          $dll = "$leanPrefix\bin\libleanshared.dll"
-          New-Item -ItemType Directory -Force -Path dist | Out-Null
-          Copy-Item ".lake\build\bin\leaner.exe" dist\
-          Copy-Item $dll dist\
-          Compress-Archive -Path dist\* -DestinationPath leaner-${{ matrix.target }}.zip
+          leanPrefix=$(lean --print-prefix)
+          mkdir -p dist
+          cp ".lake/build/bin/leaner.exe" dist/
+          cp "${leanPrefix}/bin/libleanshared.dll" dist/
+          cd dist && zip "../leaner-${{ matrix.target }}.zip" *
 
       - name: Package (Unix)
         if: runner.os != 'Windows'
