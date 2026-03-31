@@ -64,7 +64,7 @@ def parseModule (content : String) (opts : ParseOptions := {}) : IO ParseResult 
 
   let (cmds, finalState, cmdMessages) := parseAllCommands inputCtx pmctx parserState content.rawEndPos
 
-  let moduleSyntax := Syntax.node .none `module #[header, cmds]
+  let moduleSyntax := (Syntax.node .none `module #[header, cmds]).updateLeading
   let allMessages := messages ++ cmdMessages
   if allMessages.hasErrors && opts.resolveImports then
     return .error allMessages
