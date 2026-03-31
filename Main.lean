@@ -36,24 +36,31 @@ def getCache : IO System.FilePath := do
   let key := cwd.toString.map (fun c => if c.isAlphanum then c else '_')
   return (tmp : System.FilePath) / s!"leaner_{key}.cache"
 
+def cacheHeader : String := s!"leaner-cache v{version}"
+
 def loadMtimeCache : IO MtimeCache := do
   let path ← getCache
   if !(← path.pathExists) then return RBMap.empty
   let content ← IO.FS.readFile path
-  let mut cache : MtimeCache := RBMap.empty
-  for line in content.splitOn "\n" do
-    if line.isEmpty then continue
-    match line.splitOn "\t" with
-    | [path, sec, nsec] =>
-      if let (some s, some n) := (sec.toInt?, nsec.toNat?) then
-        cache := cache.insert path (s, n.toUInt32)
-    | _ => pure ()
-  return cache
+  let lines := content.splitOn "\n"
+  match lines with
+  | header :: rest =>
+    if header != cacheHeader then return RBMap.empty
+    let mut cache : MtimeCache := RBMap.empty
+    for line in rest do
+      if line.isEmpty then continue
+      match line.splitOn "\t" with
+      | [p, sec, nsec] =>
+        if let (some s, some n) := (sec.toInt?, nsec.toNat?) then
+          cache := cache.insert p (s, n.toUInt32)
+      | _ => pure ()
+    return cache
+  | _ => return RBMap.empty
 
 def saveMtimeCache (cache : MtimeCache) : IO Unit := do
-  let lines := cache.toList.map fun (path, mtime) => s!"{path}\t{mtime.1}\t{mtime.2}"
-  let cache ← getCache
-  IO.FS.writeFile cache (String.intercalate "\n" lines ++ "\n")
+  let lines := cache.toList.map fun (p, mtime) => s!"{p}\t{mtime.1}\t{mtime.2}"
+  let path ← getCache
+  IO.FS.writeFile path (cacheHeader ++ "\n" ++ String.intercalate "\n" lines ++ "\n")
 
 def getFileMtime (path : System.FilePath) : IO (Int × UInt32) := do
   let fileInfo ← path.metadata
@@ -70,6 +77,7 @@ def formatHandler (p : Parsed) : IO UInt32 := do
   let files := p.variableArgsAs! String
   let check := p.hasFlag "check"
   let diff := p.hasFlag "diff"
+  let noCache := p.hasFlag "no-cache"
   let width? := (p.flag? "width").bind (·.as? Nat)
   let indent? := (p.flag? "indent").bind (·.as? Nat)
 
@@ -91,10 +99,11 @@ def formatHandler (p : Parsed) : IO UInt32 := do
       continue
     allFiles := allFiles ++ (← collectLeanFiles path)
 
-  let cache ← if !check && !diff then loadMtimeCache else pure RBMap.empty
+  let useCache := !check && !diff && !noCache
+  let cache ← if useCache then loadMtimeCache else pure RBMap.empty
 
   let tasks ← allFiles.mapM fun path => do
-    if !check && !diff && (← isCachedFormatted cache path) then
+    if useCache && (← isCachedFormatted cache path) then
       return (path, none)
     let task ← IO.asTask do
       let source := (← IO.FS.readFile path).replace "\r\n" "\n"
@@ -102,13 +111,16 @@ def formatHandler (p : Parsed) : IO UInt32 := do
       return (source, result)
     return (path, some task)
 
-  let mut changedCount := 0
+  let mut formatted := 0
+  let mut unchanged := 0
+  let mut skipped := 0
+  let mut nPartial := 0
   let mut newCache := cache
 
   for (path, task?) in tasks do
     let file := path.toString
     match task? with
-    | none => pure ()
+    | none => skipped := skipped + 1
     | some task =>
       match task.get with
       | .error e =>
@@ -118,8 +130,10 @@ def formatHandler (p : Parsed) : IO UInt32 := do
         for diag in result.diagnostics do
           IO.eprintln s!"{file}: {diag}"
 
-        if result.changed then
-          changedCount := changedCount + 1
+        if result.isPartial then
+          nPartial := nPartial + 1
+        else if result.changed then
+          formatted := formatted + 1
           if check then
             IO.println s!"Would reformat: {file}"
           else if diff then
@@ -128,21 +142,26 @@ def formatHandler (p : Parsed) : IO UInt32 := do
               IO.println s!"{line}"
           else
             IO.FS.writeFile path result.output
-            IO.println s!"Formatted: {file}"
             let mtime ← getFileMtime path
             newCache := newCache.insert file mtime
         else
+          unchanged := unchanged + 1
           if !check && !diff then
             let mtime ← getFileMtime path
             newCache := newCache.insert file mtime
 
-  if !check && !diff then
+  if useCache then
     saveMtimeCache newCache
 
-  if check && changedCount > 0 then
-    IO.println s!"\n{changedCount} file(s) would be reformatted"
-    return 1
+  let parts := #[
+    if formatted > 0 then s!"{formatted} formatted" else "",
+    if skipped   > 0 then s!"{skipped} skipped" else "",
+    if unchanged > 0 then s!"{unchanged} unchanged" else "",
+    if nPartial  > 0 then s!"{nPartial} partial" else ""
+  ].filter (· != "")
+  IO.println (String.intercalate ", " parts.toList)
 
+  if check && formatted > 0 then return 1
   if hasError then return 1
   return 0
 
@@ -171,18 +190,31 @@ def checkHandler (p : Parsed) : IO UInt32 := do
     let task ← IO.asTask (formatFile path env config)
     return (path, task)
 
-  let mut needsFormat := false
+  let mut formatted := 0
+  let mut unchanged := 0
+  let mut nPartial  := 0
+
   for (path, task) in tasks do
     match task.get with
     | .error e =>
       IO.eprintln s!"Error: {path}: {e}"
     | .ok result =>
-      if result.changed then
+      if result.isPartial then
+        nPartial := nPartial + 1
+      else if result.changed then
         IO.println s!"Would reformat: {path}"
-        needsFormat := true
+        formatted := formatted + 1
+      else
+        unchanged := unchanged + 1
 
-  if needsFormat then return 1
-  IO.println "All files are properly formatted"
+  let parts := #[
+    if formatted > 0 then s!"{formatted} would reformat" else "",
+    if unchanged > 0 then s!"{unchanged} unchanged" else "",
+    if nPartial  > 0 then s!"{nPartial} partial" else ""
+  ].filter (· != "")
+  IO.println (String.intercalate ", " parts.toList)
+
+  if formatted > 0 then return 1
   return 0
 
 def formatCmd : Cmd := `[Cli|
@@ -192,6 +224,7 @@ def formatCmd : Cmd := `[Cli|
   FLAGS:
     c, check;               "Check if files are formatted without modifying them"
     d, diff;                "Show diff instead of modifying files"
+    "no-cache";             "Ignore and discard the mtime cache"
     w, width : Nat;         "Maximum line width (default: 100, or from leaner.toml)"
     i, indent : Nat;        "Indentation width in spaces (default: 2, or from leaner.toml)"
 

@@ -14,6 +14,7 @@ open Leaner.Formatter.SyntaxPrinter
 structure FormatResult where
   output : String
   changed : Bool
+  isPartial : Bool := false
   diagnostics : Array Diagnostic := #[]
   deriving Inhabited
 
@@ -53,16 +54,12 @@ def formatSourceAST (source : String) (env : Environment) (fileName : String := 
     return { output := source, changed := false, diagnostics := diags.toArray }
 
   | .ok stx _ _ messages =>
-    if messages.hasErrors then
-      return { output := source, changed := false, diagnostics := #[] }
-
     let formatted := formatToString stx config source
-
     let output := postProcess formatted config
-
     return {
       output
       changed := output != source
+      isPartial := messages.hasErrors
       diagnostics := #[]
     }
 
