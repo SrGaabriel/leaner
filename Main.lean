@@ -7,6 +7,8 @@ open Leaner.Formatter
 open Leaner.Core
 open Leaner.Core.Parser
 
+def version := "0.1.1"
+
 partial def collectLeanFiles (path : System.FilePath) : IO (Array System.FilePath) := do
   if path.components.any (· == ".lake") then
     return #[]
@@ -26,11 +28,18 @@ def loadConfig (width? : Option Nat) (indent? : Option Nat) : IO Config.Formatte
 
 abbrev MtimeCache := Lean.RBMap String (Int × UInt32) compare
 
-def cachePath : System.FilePath := ".lake" / "leaner.cache"
+def getCache : IO System.FilePath := do
+  let tmp ← IO.getEnv "TEMP" >>= fun t =>
+    IO.getEnv "TMPDIR" >>= fun t2 =>
+    return t.orElse (fun _ => t2) |>.getD "/tmp"
+  let cwd ← IO.currentDir
+  let key := cwd.toString.map (fun c => if c.isAlphanum then c else '_')
+  return (tmp : System.FilePath) / s!"leaner_{key}.cache"
 
 def loadMtimeCache : IO MtimeCache := do
-  if !(← cachePath.pathExists) then return RBMap.empty
-  let content ← IO.FS.readFile cachePath
+  let path ← getCache
+  if !(← path.pathExists) then return RBMap.empty
+  let content ← IO.FS.readFile path
   let mut cache : MtimeCache := RBMap.empty
   for line in content.splitOn "\n" do
     if line.isEmpty then continue
@@ -43,7 +52,8 @@ def loadMtimeCache : IO MtimeCache := do
 
 def saveMtimeCache (cache : MtimeCache) : IO Unit := do
   let lines := cache.toList.map fun (path, mtime) => s!"{path}\t{mtime.1}\t{mtime.2}"
-  IO.FS.writeFile cachePath (String.intercalate "\n" lines ++ "\n")
+  let cache ← getCache
+  IO.FS.writeFile cache (String.intercalate "\n" lines ++ "\n")
 
 def getFileMtime (path : System.FilePath) : IO (Int × UInt32) := do
   let fileInfo ← path.metadata
@@ -176,7 +186,7 @@ def checkHandler (p : Parsed) : IO UInt32 := do
   return 0
 
 def formatCmd : Cmd := `[Cli|
-  format VIA formatHandler; ["0.1.0"]
+  format VIA formatHandler; [version]
   "Format Lean 4 source files"
 
   FLAGS:
@@ -190,7 +200,7 @@ def formatCmd : Cmd := `[Cli|
 ]
 
 def checkCmd : Cmd := `[Cli|
-  check VIA checkHandler; ["0.1.0"]
+  check VIA checkHandler; [version]
   "Check if Lean 4 source files are properly formatted"
 
   FLAGS:
@@ -202,7 +212,7 @@ def checkCmd : Cmd := `[Cli|
 ]
 
 def leanerCmd : Cmd := `[Cli|
-  leaner NOOP; ["0.1.0"]
+  leaner NOOP; ["0.1.1"]
   "Lean 4 code quality tools: formatter, linter, and dead code eliminator"
 
   SUBCOMMANDS:

@@ -2,7 +2,7 @@ import Lake
 open Lake DSL
 
 package "leaner" where
-  version := v!"0.1.0"
+  version := v!"0.1.1"
 
 require Cli from git "https://github.com/leanprover/lean4-cli" @ "main"
 require kenosis from git "https://github.com/SrGaabriel/kenosis" @ "main"
