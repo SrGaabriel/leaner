@@ -14,7 +14,7 @@ structure ParseOptions where
   deriving Inhabited
 
 inductive ParseResult where
-  | ok (stx : Syntax) (parserState : ModuleParserState) (env : Environment)
+  | ok (stx : Syntax) (parserState : ModuleParserState) (env : Environment) (messages : MessageLog)
   | error (messages : MessageLog)
   deriving Inhabited
 
@@ -69,7 +69,7 @@ def parseModule (content : String) (env : Environment) (opts : ParseOptions := {
   if allMessages.hasErrors && opts.resolveImports then
     return .error allMessages
 
-  return .ok moduleSyntax finalState env
+  return .ok moduleSyntax finalState env allMessages
 
 def parseContent (content : String) (env : Environment) (opts : ParseOptions := {}) : IO ParseResult := do
   parseModule content env opts

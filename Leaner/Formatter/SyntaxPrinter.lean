@@ -79,6 +79,7 @@ def printAtom (info : SourceInfo) (val : String) : PrinterM Doc := do
     let leading := l.toString
     let trailing := t.toString
     markLeadingComments startPos
+    setPos t.stopPos.byteIdx
     return Doc.str leading ++ Doc.str val ++ Doc.str trailing
   | _ =>
     return Doc.str val
@@ -187,25 +188,14 @@ mutual
     return Doc.mkNest indentSize (Doc.concatDocs docs)
 end
 
-def emitRemainingComments : PrinterM Doc := do
-  let comments ← getComments
-  let emitted := (← get).emittedComments
-  let mut doc := Doc.empty
-  for i in [:comments.size] do
-    if !emitted.contains i then
-      let c := comments[i]!
-      doc := doc ++ Doc.str c.text ++ Doc.hardlineDoc
-  return doc
-
 def formatSyntax (stx : Syntax) (config : Config.FormatterConfig) (source : String) : Doc := Id.run do
   let comments := extractComments source
 
   let ctx : PrinterContext := { config, source, comments }
   let (doc, state) := printSyntax stx |>.run ctx |>.run {}
 
-  let (remainingDoc, _) := emitRemainingComments |>.run ctx |>.run state
-
-  doc ++ remainingDoc
+  let tail := String.Pos.Raw.extract source ⟨state.pos⟩ source.rawEndPos
+  doc ++ Doc.str tail
 
 def formatToString (stx : Syntax) (config : Config.FormatterConfig) (source : String) : String :=
   let doc := formatSyntax stx config source

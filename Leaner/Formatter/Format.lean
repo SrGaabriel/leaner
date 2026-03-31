@@ -52,7 +52,10 @@ def formatSourceAST (source : String) (env : Environment) (fileName : String := 
         (some "parser")
     return { output := source, changed := false, diagnostics := diags.toArray }
 
-  | .ok stx _ _ =>
+  | .ok stx _ _ messages =>
+    if messages.hasErrors then
+      return { output := source, changed := false, diagnostics := #[] }
+
     let formatted := formatToString stx config source
 
     let output := postProcess formatted config
@@ -77,7 +80,7 @@ def formatSourceMinimal (source : String) (env : Environment) (fileName : String
         (some "parser")
     return { output := source, changed := false, diagnostics := diags.toArray }
 
-  | .ok _ _ _ =>
+  | .ok _ _ _ _ =>
     let output := postProcess source config
 
     return {
