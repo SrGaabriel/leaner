@@ -7,7 +7,7 @@ open Leaner.Formatter
 open Leaner.Core
 open Leaner.Core.Parser
 
-def version := "0.1.1"
+def version := "0.1.2"
 
 partial def collectLeanFiles (path : System.FilePath) : IO (Array System.FilePath) := do
   if path.components.any (· == ".lake") then
@@ -245,7 +245,7 @@ def checkCmd : Cmd := `[Cli|
 ]
 
 def leanerCmd : Cmd := `[Cli|
-  leaner NOOP; ["0.1.1"]
+  leaner NOOP; [version]
   "Lean 4 code quality tools: formatter, linter, and dead code eliminator"
 
   SUBCOMMANDS:
