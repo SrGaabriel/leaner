@@ -18,3 +18,4 @@ name = "Leaner"
 [[lean_exe]]
 name = "leaner"
 root = "Main"
+supportInterpreter = true

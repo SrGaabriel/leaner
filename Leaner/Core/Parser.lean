@@ -24,7 +24,8 @@ def mkInputContext (content : String) (fileName : String) : InputContext :=
 
 def initParseEnv : IO Environment := do
   Lean.initSearchPath (← Lean.findSysroot)
-  let env ← importModules #[{ module := `Init }] {}
+  unsafe Lean.enableInitializersExecution
+  let env ← importModules #[{ module := `Init }] {} (loadExts := true)
   return env
 
 private def parseAllCommands (inputCtx : InputContext) (pmctx : ParserModuleContext)
