@@ -22,7 +22,7 @@ jobs:
           - os: ubuntu-24.04-arm
             target: aarch64-linux
             binary: leaner
-          - os: macos-13
+          - os: macos-15-intel
             target: x86_64-darwin
             binary: leaner
           - os: macos-latest
