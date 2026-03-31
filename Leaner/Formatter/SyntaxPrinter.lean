@@ -68,79 +68,18 @@ def getCommentsBefore (pos : Nat) : PrinterM (Array Comment) := do
       markEmitted i
   return result
 
-def getTrailingComment (pos : Nat) (line : Nat) : PrinterM (Option Comment) := do
-  let comments ← getComments
-  for i in [:comments.size] do
-    let c := comments[i]!
-    let alreadyEmitted ← hasBeenEmitted i
-    if c.startPos > pos && c.line == line && c.kind == .line && !alreadyEmitted then
-      markEmitted i
-      return some c
-  return none
 
-def commentToDoc (c : Comment) : Doc :=
-  Doc.str c.text
-
-def emitLeadingComments (pos : Nat) : PrinterM Doc := do
-  let comments ← getCommentsBefore pos
-  if comments.isEmpty then
-    return Doc.empty
-  let mut doc := Doc.empty
-  for c in comments do
-    doc := doc ++ commentToDoc c ++ Doc.hardlineDoc
-  return doc
-
-def emitTrailingComment (pos : Nat) (line : Nat) : PrinterM Doc := do
-  if let some c ← getTrailingComment pos line then
-    return Doc.str " " ++ commentToDoc c
-  return Doc.empty
-
-def countNewlines (s : String) : Nat :=
-  s.toList.filter (· == '\n') |>.length
-
-def limitNewlines (n : Nat) (maxNewlines : Nat) : Nat :=
-  min n maxNewlines
-
-def stripBlockCommentsFromTrivia (trivia : String) : String := Id.run do
-  return trivia
+def markLeadingComments (pos : Nat) : PrinterM Unit := do
+  let _ ← getCommentsBefore pos
 
 def printAtom (info : SourceInfo) (val : String) : PrinterM Doc := do
-  let cfg ← getConfig
-
   match info with
   | .original l pos t _ =>
     let startPos := pos.byteIdx
     let leading := l.toString
     let trailing := t.toString
-
-    let leadingComments ← emitLeadingComments startPos
-
-    let mut doc := leadingComments
-
-    if leading.any (· == '\n') then
-      let newlines := countNewlines leading
-      let limited := limitNewlines newlines (cfg.maxBlankLines + 1)
-      for _ in [:limited] do
-        doc := doc ++ Doc.str "\n"
-      let parts := leading.splitOn "\n"
-      if let some indent := parts.getLast? then
-        if !indent.isEmpty then
-          doc := doc ++ Doc.str indent
-    else if !leading.isEmpty then
-      doc := doc ++ Doc.str leading
-
-    doc := doc ++ Doc.str val
-
-    if trailing.any (· == '\n') then
-      let newlines := countNewlines trailing
-      let limited := limitNewlines newlines (cfg.maxBlankLines + 1)
-      for _ in [:limited] do
-        doc := doc ++ Doc.hardlineDoc
-    else if !trailing.isEmpty then
-      doc := doc ++ Doc.str trailing
-
-    return doc
-
+    markLeadingComments startPos
+    return Doc.str leading ++ Doc.str val ++ Doc.str trailing
   | _ =>
     return Doc.str val
 
@@ -255,7 +194,7 @@ def emitRemainingComments : PrinterM Doc := do
   for i in [:comments.size] do
     if !emitted.contains i then
       let c := comments[i]!
-      doc := doc ++ commentToDoc c ++ Doc.hardlineDoc
+      doc := doc ++ Doc.str c.text ++ Doc.hardlineDoc
   return doc
 
 def formatSyntax (stx : Syntax) (config : Config.FormatterConfig) (source : String) : Doc := Id.run do
