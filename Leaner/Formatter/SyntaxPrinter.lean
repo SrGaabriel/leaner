@@ -122,6 +122,10 @@ def printAtom (info : SourceInfo) (val : String) : PrinterM Doc := do
       let limited := limitNewlines newlines (cfg.maxBlankLines + 1)
       for _ in [:limited] do
         doc := doc ++ Doc.hardlineDoc
+      let parts := leading.splitOn "\n"
+      if let some indent := parts.getLast? then
+        if !indent.isEmpty then
+          doc := doc ++ Doc.str indent
     else if !leading.isEmpty then
       doc := doc ++ Doc.str leading
 
@@ -150,7 +154,12 @@ mutual
     | .node _ kind args => printNode kind args
 
   partial def printNode (kind : SyntaxNodeKind) (args : Array Syntax) : PrinterM Doc := do
-    if kind == `Lean.Parser.Command.declaration then
+    if kind == `choice then
+      if !args.isEmpty then
+        printSyntax args[0]!
+      else
+        return Doc.empty
+    else if kind == `Lean.Parser.Command.declaration then
       printChildren args
     else if kind == `Lean.Parser.Command.def then
       printDef args

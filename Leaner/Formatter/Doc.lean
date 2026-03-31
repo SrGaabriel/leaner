@@ -183,11 +183,12 @@ partial def render (width : Nat) (doc : Doc) : String := Id.run do
         | .break_ => stack := ⟨i, m, broken⟩ :: stack
       | .align doc =>
         stack := ⟨state.column, m, doc⟩ :: stack
-      | .fill docs =>
-        if docs.isEmpty then pure ()
-        else
-          for doc in docs do
-            stack := ⟨i, m, doc⟩ :: ⟨i, m, softlineDoc⟩ :: stack
+        | .fill docs =>
+          if docs.isEmpty then
+            stack := ⟨i, m, docs.toList.getLast!⟩ :: stack
+            for idx in [1:docs.size] do
+              let prevDoc := docs[docs.size - 1 - idx]!
+              stack := ⟨i, m, prevDoc⟩ :: ⟨i, m, softlineDoc⟩ :: stack
 
   state.output
 
