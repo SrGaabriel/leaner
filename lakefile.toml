@@ -1,0 +1,20 @@
+name = "leaner"
+version = "0.1.0"
+defaultTargets = ["leaner"]
+
+[[require]]
+name = "Cli"
+git = "https://github.com/leanprover/lean4-cli"
+rev = "main"
+
+[[require]]
+name = "kenosis"
+git = "https://github.com/SrGaabriel/kenosis"
+rev = "main"
+
+[[lean_lib]]
+name = "Leaner"
+
+[[lean_exe]]
+name = "leaner"
+root = "Main"
