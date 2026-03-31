@@ -38,9 +38,9 @@ def postProcess (source : String) (config : Config.FormatterConfig) : String := 
 
   result
 
-def formatSourceAST (source : String) (fileName : String := "<input>")
+def formatSourceAST (source : String) (env : Environment) (fileName : String := "<input>")
     (config : Config.FormatterConfig := {}) : IO FormatResult := do
-  let parseResult ← Parser.parseModule source { fileName, resolveImports := false }
+  let parseResult ← Parser.parseModule source env { fileName, resolveImports := false }
 
   match parseResult with
   | .error messages =>
@@ -63,9 +63,9 @@ def formatSourceAST (source : String) (fileName : String := "<input>")
       diagnostics := #[]
     }
 
-def formatSourceMinimal (source : String) (fileName : String := "<input>")
+def formatSourceMinimal (source : String) (env : Environment) (fileName : String := "<input>")
     (config : Config.FormatterConfig := {}) : IO FormatResult := do
-  let parseResult ← Parser.parseModule source { fileName, resolveImports := false }
+  let parseResult ← Parser.parseModule source env { fileName, resolveImports := false }
 
   match parseResult with
   | .error messages =>
@@ -86,39 +86,39 @@ def formatSourceMinimal (source : String) (fileName : String := "<input>")
       diagnostics := #[]
     }
 
-def formatSource (source : String) (fileName : String := "<input>")
+def formatSource (source : String) (env : Environment) (fileName : String := "<input>")
     (config : Config.FormatterConfig := {}) : IO FormatResult := do
-  let result ← formatSourceAST source fileName config
+  let result ← formatSourceAST source env fileName config
 
   if result.diagnostics.size > 0 then
-    formatSourceMinimal source fileName config
+    formatSourceMinimal source env fileName config
   else
     return result
 
-def formatFile (path : System.FilePath) (config : Config.FormatterConfig := {}) : IO FormatResult := do
-  let source ← IO.FS.readFile path
-  formatSource source path.toString config
+def formatFile (path : System.FilePath) (env : Environment) (config : Config.FormatterConfig := {}) : IO FormatResult := do
+  let source := (← IO.FS.readFile path).replace "\r\n" "\n"
+  formatSource source env path.toString config
 
-def formatFiles (paths : Array System.FilePath) (config : Config.FormatterConfig := {})
+def formatFiles (paths : Array System.FilePath) (env : Environment) (config : Config.FormatterConfig := {})
     : IO (Array (System.FilePath × FormatResult)) := do
   let mut results := #[]
   for path in paths do
-    let result ← formatFile path config
+    let result ← formatFile path env config
     results := results.push (path, result)
   return results
 
-def formatFileInPlace (path : System.FilePath) (config : Config.FormatterConfig := {}) : IO Bool := do
-  let result ← formatFile path config
+def formatFileInPlace (path : System.FilePath) (env : Environment) (config : Config.FormatterConfig := {}) : IO Bool := do
+  let result ← formatFile path env config
   if result.changed then
     IO.FS.writeFile path result.output
     return true
   return false
 
-def formatFilesInPlace (paths : Array System.FilePath) (config : Config.FormatterConfig := {})
+def formatFilesInPlace (paths : Array System.FilePath) (env : Environment) (config : Config.FormatterConfig := {})
     : IO (Array System.FilePath) := do
   let mut changed := #[]
   for path in paths do
-    if ← formatFileInPlace path config then
+    if ← formatFileInPlace path env config then
       changed := changed.push path
   return changed
 
@@ -160,10 +160,10 @@ def simpleDiff (original formatted : String) : Array DiffLine := Id.run do
 
   result
 
-def formatToDiff (path : System.FilePath) (config : Config.FormatterConfig := {})
+def formatToDiff (path : System.FilePath) (env : Environment) (config : Config.FormatterConfig := {})
     : IO (Option String) := do
-  let source ← IO.FS.readFile path
-  let result ← formatFile path config
+  let source := (← IO.FS.readFile path).replace "\r\n" "\n"
+  let result ← formatFile path env config
 
   if !result.changed then
     return none

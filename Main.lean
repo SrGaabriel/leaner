@@ -2,8 +2,10 @@ import Leaner
 import Cli
 
 open Cli
+open Lean
 open Leaner.Formatter
 open Leaner.Core
+open Leaner.Core.Parser
 
 partial def collectLeanFiles (path : System.FilePath) : IO (Array System.FilePath) := do
   if path.components.any (· == ".lake") then
@@ -20,8 +22,39 @@ partial def collectLeanFiles (path : System.FilePath) : IO (Array System.FilePat
 
 def loadConfig (width? : Option Nat) (indent? : Option Nat) : IO Config.FormatterConfig := do
   let baseConfig ← Config.loadConfigFromCwd
-
   return Config.mergeCliOptions baseConfig.formatter width? indent?
+
+abbrev MtimeCache := Lean.RBMap String (Int × UInt32) compare
+
+def cachePath : System.FilePath := ".lake" / "leaner.cache"
+
+def loadMtimeCache : IO MtimeCache := do
+  if !(← cachePath.pathExists) then return RBMap.empty
+  let content ← IO.FS.readFile cachePath
+  let mut cache : MtimeCache := RBMap.empty
+  for line in content.splitOn "\n" do
+    if line.isEmpty then continue
+    match line.splitOn "\t" with
+    | [path, sec, nsec] =>
+      if let (some s, some n) := (sec.toInt?, nsec.toNat?) then
+        cache := cache.insert path (s, n.toUInt32)
+    | _ => pure ()
+  return cache
+
+def saveMtimeCache (cache : MtimeCache) : IO Unit := do
+  let lines := cache.toList.map fun (path, mtime) => s!"{path}\t{mtime.1}\t{mtime.2}"
+  IO.FS.writeFile cachePath (String.intercalate "\n" lines ++ "\n")
+
+def getFileMtime (path : System.FilePath) : IO (Int × UInt32) := do
+  let fileInfo ← path.metadata
+  return (fileInfo.modified.sec, fileInfo.modified.nsec)
+
+def isCachedFormatted (cache : MtimeCache) (path : System.FilePath) : IO Bool := do
+  match cache.find? path.toString with
+  | none => return false
+  | some (cachedSec, cachedNsec) =>
+    let (sec, nsec) ← getFileMtime path
+    return sec == cachedSec && nsec == cachedNsec
 
 def formatHandler (p : Parsed) : IO UInt32 := do
   let files := p.variableArgsAs! String
@@ -36,9 +69,9 @@ def formatHandler (p : Parsed) : IO UInt32 := do
     IO.eprintln "Error: No files specified"
     return 1
 
-  let mut hasError := false
-  let mut changedCount := 0
+  let env ← initParseEnv
 
+  let mut hasError := false
   let mut allFiles : Array System.FilePath := #[]
   for file in files do
     let path : System.FilePath := file
@@ -48,24 +81,53 @@ def formatHandler (p : Parsed) : IO UInt32 := do
       continue
     allFiles := allFiles ++ (← collectLeanFiles path)
 
-  for path in allFiles do
+  let cache ← if !check && !diff then loadMtimeCache else pure RBMap.empty
+
+  let tasks ← allFiles.mapM fun path => do
+    if !check && !diff && (← isCachedFormatted cache path) then
+      return (path, none)
+    let task ← IO.asTask do
+      let source := (← IO.FS.readFile path).replace "\r\n" "\n"
+      let result ← formatSource source env path.toString config
+      return (source, result)
+    return (path, some task)
+
+  let mut changedCount := 0
+  let mut newCache := cache
+
+  for (path, task?) in tasks do
     let file := path.toString
-    let result ← formatFile path config
+    match task? with
+    | none => pure ()
+    | some task =>
+      match task.get with
+      | .error e =>
+        IO.eprintln s!"Error: {file}: {e}"
+        hasError := true
+      | .ok (source, result) =>
+        for diag in result.diagnostics do
+          IO.eprintln s!"{file}: {diag}"
 
-    for diag in result.diagnostics do
-      IO.eprintln s!"{file}: {diag}"
+        if result.changed then
+          changedCount := changedCount + 1
+          if check then
+            IO.println s!"Would reformat: {file}"
+          else if diff then
+            IO.print s!"--- {path}\n+++ {path} (formatted)\n"
+            for line in simpleDiff source result.output do
+              IO.println s!"{line}"
+          else
+            IO.FS.writeFile path result.output
+            IO.println s!"Formatted: {file}"
+            let mtime ← getFileMtime path
+            newCache := newCache.insert file mtime
+        else
+          if !check && !diff then
+            let mtime ← getFileMtime path
+            newCache := newCache.insert file mtime
 
-    if result.changed then
-      changedCount := changedCount + 1
-
-      if check then
-        IO.println s!"Would reformat: {file}"
-      else if diff then
-        if let some d ← formatToDiff path config then
-          IO.println d
-      else
-        IO.FS.writeFile path result.output
-        IO.println s!"Formatted: {file}"
+  if !check && !diff then
+    saveMtimeCache newCache
 
   if check && changedCount > 0 then
     IO.println s!"\n{changedCount} file(s) would be reformatted"
@@ -85,7 +147,7 @@ def checkHandler (p : Parsed) : IO UInt32 := do
     IO.eprintln "Error: No files specified"
     return 1
 
-  let mut needsFormat := false
+  let env ← initParseEnv
 
   let mut allFiles : Array System.FilePath := #[]
   for file in files do
@@ -95,17 +157,23 @@ def checkHandler (p : Parsed) : IO UInt32 := do
       continue
     allFiles := allFiles ++ (← collectLeanFiles path)
 
-  for path in allFiles do
-    let result ← formatFile path config
-    if result.changed then
-      IO.println s!"Would reformat: {path}"
-      needsFormat := true
+  let tasks ← allFiles.mapM fun path => do
+    let task ← IO.asTask (formatFile path env config)
+    return (path, task)
 
-  if needsFormat then
-    return 1
-  else
-    IO.println "All files are properly formatted"
-    return 0
+  let mut needsFormat := false
+  for (path, task) in tasks do
+    match task.get with
+    | .error e =>
+      IO.eprintln s!"Error: {path}: {e}"
+    | .ok result =>
+      if result.changed then
+        IO.println s!"Would reformat: {path}"
+        needsFormat := true
+
+  if needsFormat then return 1
+  IO.println "All files are properly formatted"
+  return 0
 
 def formatCmd : Cmd := `[Cli|
   format VIA formatHandler; ["0.1.0"]

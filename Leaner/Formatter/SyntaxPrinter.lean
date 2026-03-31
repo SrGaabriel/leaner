@@ -121,7 +121,7 @@ def printAtom (info : SourceInfo) (val : String) : PrinterM Doc := do
       let newlines := countNewlines leading
       let limited := limitNewlines newlines (cfg.maxBlankLines + 1)
       for _ in [:limited] do
-        doc := doc ++ Doc.hardlineDoc
+        doc := doc ++ Doc.str "\n"
       let parts := leading.splitOn "\n"
       if let some indent := parts.getLast? then
         if !indent.isEmpty then

@@ -51,8 +51,7 @@ private def parseAllCommands (inputCtx : InputContext) (pmctx : ParserModuleCont
 
   (Syntax.node .none `Lean.Parser.Module.commands cmds, state, messages)
 
-def parseModule (content : String) (opts : ParseOptions := {}) : IO ParseResult := do
-  let env ← initParseEnv
+def parseModule (content : String) (env : Environment) (opts : ParseOptions := {}) : IO ParseResult := do
   let inputCtx := mkInputContext content opts.fileName
 
   let (header, parserState, messages) ← parseHeader inputCtx
@@ -72,12 +71,12 @@ def parseModule (content : String) (opts : ParseOptions := {}) : IO ParseResult 
 
   return .ok moduleSyntax finalState env
 
-def parseContent (content : String) (opts : ParseOptions := {}) : IO ParseResult := do
-  parseModule content opts
+def parseContent (content : String) (env : Environment) (opts : ParseOptions := {}) : IO ParseResult := do
+  parseModule content env opts
 
-def parseFile (path : System.FilePath) : IO ParseResult := do
+def parseFile (path : System.FilePath) (env : Environment) : IO ParseResult := do
   let content ← IO.FS.readFile path
-  parseContent content { fileName := path.toString }
+  parseContent content env { fileName := path.toString }
 
 def syntaxRange (source : String) (stx : Syntax) : Option Range := do
   let head ← stx.getHeadInfo?.bind (·.getPos?)
