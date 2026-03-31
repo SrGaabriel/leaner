@@ -14,3 +14,6 @@ cd leaner
 lake build
 lake run install
 ```
+
+> [!NOTE]
+> On Windows, the release binaries are in a `.zip` file along with a `.dll` file. Make sure to extract both files and place them in the same directory.
