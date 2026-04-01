@@ -6,19 +6,42 @@ namespace Leaner.Formatter.SyntaxPrinter
 
 open Lean
 open Leaner.Core
-open Leaner.Core.Comments
 open Leaner.Formatter.Doc
+
+private def triviaLastLineIndent (leading : String) : Option Nat :=
+  if !leading.contains '\n' then none
+  else
+    let lastLine := (leading.splitOn "\n").getLast!
+    let n := lastLine.toList.takeWhile (· == ' ') |>.length
+    if n >= 2 then some n else none
+
+private def syntaxMinTriviaIndent : Syntax → Nat → Nat
+  | .atom (.original l _ _ _) _, acc =>
+    match triviaLastLineIndent l.toString with
+    | some n => min acc n
+    | none   => acc
+  | .ident (.original l _ _ _) _ _ _, acc =>
+    match triviaLastLineIndent l.toString with
+    | some n => min acc n
+    | none   => acc
+  | .node _ _ args, acc => args.foldl (fun a s => syntaxMinTriviaIndent s a) acc
+  | _, acc => acc
+
+def detectSourceIndentUnit (stx : Syntax) : Nat :=
+  let minFound := syntaxMinTriviaIndent stx 1000
+  if minFound >= 1000 then 2 else minFound
+
+private def countLeadingSpaces (s : String) : Nat :=
+  s.toList.takeWhile (· == ' ') |>.length
 
 structure PrinterContext where
   config : Config.FormatterConfig := {}
   source : String
-  comments : Array Comment
+  sourceIndentUnit : Nat := 2
   deriving Inhabited
 
 structure PrinterState where
   pos : Nat := 0
-  emittedComments : Array Nat := #[]
-  indentLevel : Nat := 0
   deriving Inhabited
 
 abbrev PrinterM := ReaderT PrinterContext (StateM PrinterState)
@@ -26,61 +49,41 @@ abbrev PrinterM := ReaderT PrinterContext (StateM PrinterState)
 def getConfig : PrinterM Config.FormatterConfig := do
   return (← read).config
 
-def getSource : PrinterM String := do
-  return (← read).source
-
-def getComments : PrinterM (Array Comment) := do
-  return (← read).comments
-
 def getPos : PrinterM Nat := do
   return (← get).pos
 
 def setPos (pos : Nat) : PrinterM Unit := do
   modify fun s => { s with pos }
 
-def getIndent : PrinterM Nat := do
-  return (← get).indentLevel
+private def rescaleSpaces (origSpaces : Nat) (origUnit targetUnit : Nat) : Nat :=
+  if origUnit == 0 then origSpaces
+  else origSpaces / origUnit * targetUnit + origSpaces % origUnit
 
-def withIndent (n : Nat) (m : PrinterM α) : PrinterM α := do
-  let old ← getIndent
-  modify fun s => { s with indentLevel := old + n }
-  let result ← m
-  modify fun s => { s with indentLevel := old }
-  return result
-
-def isEmitted (idx : Nat) : PrinterM Bool := do
-  return (← get).emittedComments.contains idx
-
-def markEmitted (idx : Nat) : PrinterM Unit := do
-  modify fun s => { s with emittedComments := s.emittedComments.push idx }
-
-def hasBeenEmitted (i : Nat) : PrinterM Bool := do
-  return (← get).emittedComments.contains i
-
-def getCommentsBefore (pos : Nat) : PrinterM (Array Comment) := do
-  let comments ← getComments
-  let mut result := #[]
-  for i in [:comments.size] do
-    let c := comments[i]!
-    let alreadyEmitted ← hasBeenEmitted i
-    if c.endPos <= pos && !alreadyEmitted then
-      result := result.push c
-      markEmitted i
-  return result
-
-
-def markLeadingComments (pos : Nat) : PrinterM Unit := do
-  let _ ← getCommentsBefore pos
+private def normalizeLeadingTrivia (trivia : String) (origUnit targetUnit : Nat) : String :=
+  if origUnit == targetUnit || !trivia.contains '\n' then trivia
+  else
+    let lines := trivia.splitOn "\n"
+    String.intercalate "\n" (lines.mapIdx fun i line =>
+      if i + 1 == lines.length then
+        let origSpaces := countLeadingSpaces line
+        "".pushn ' ' (rescaleSpaces origSpaces origUnit targetUnit)
+      else
+        let trimmed := String.ofList (line.toList.dropWhile (· == ' '))
+        if trimmed.isEmpty then ""
+        else
+          let origSpaces := countLeadingSpaces line
+          "".pushn ' ' (rescaleSpaces origSpaces origUnit targetUnit) ++ trimmed)
 
 def printAtom (info : SourceInfo) (val : String) : PrinterM Doc := do
   match info with
-  | .original l pos t _ =>
-    let startPos := pos.byteIdx
-    let leading := l.toString
-    let trailing := t.toString
-    markLeadingComments startPos
+  | .original l _ t _ =>
     setPos t.stopPos.byteIdx
-    return Doc.str leading ++ Doc.str val ++ Doc.str trailing
+    let ctx ← read
+    let targetUnit := match ctx.config.indentStyle with
+      | .spaces n => n
+      | .tabs => ctx.sourceIndentUnit
+    let leading := normalizeLeadingTrivia l.toString ctx.sourceIndentUnit targetUnit
+    return Doc.str leading ++ Doc.str val ++ Doc.str t.toString
   | _ =>
     return Doc.str val
 
@@ -95,38 +98,8 @@ mutual
 
   partial def printNode (kind : SyntaxNodeKind) (args : Array Syntax) : PrinterM Doc := do
     if kind == `choice then
-      if !args.isEmpty then
-        printSyntax args[0]!
-      else
-        return Doc.empty
-    else if kind == `Lean.Parser.Command.declaration then
-      printChildren args
-    else if kind == `Lean.Parser.Command.def then
-      printDef args
-    else if kind == `Lean.Parser.Command.theorem then
-      printChildren args
-    else if kind == `Lean.Parser.Command.structure then
-      printStructure args
-    else if kind == `Lean.Parser.Command.namespace then
-      printChildren args
-    else if kind == `Lean.Parser.Command.section then
-      printChildren args
-    else if kind == `Lean.Parser.Command.open then
-      printChildren args
-    else if kind == `Lean.Parser.Command.variable then
-      printChildren args
-    else if kind == `Lean.Parser.Term.fun then
-      printFun args
-    else if kind == `Lean.Parser.Term.match then
-      printMatch args
-    else if kind == `Lean.Parser.Term.do then
-      printChildren args
-    else if kind == `Lean.Parser.Term.if then
-      printIf args
-    else if kind == `Lean.Parser.Term.let then
-      printChildren args
-    else if kind == `Lean.Parser.Term.where then
-      printWhere args
+      if !args.isEmpty then printSyntax args[0]!
+      else return Doc.empty
     else
       printChildren args
 
@@ -136,64 +109,12 @@ mutual
       let doc ← printSyntax arg
       docs := docs.push doc
     return Doc.concatDocs docs
-
-  partial def printDef (args : Array Syntax) : PrinterM Doc := do
-    let mut docs : Array Doc := #[]
-    for arg in args do
-      let doc ← printSyntax arg
-      docs := docs.push doc
-    return Doc.mkGroup (Doc.concatDocs docs)
-
-  partial def printStructure (args : Array Syntax) : PrinterM Doc := do
-    let mut docs : Array Doc := #[]
-    for arg in args do
-      let doc ← printSyntax arg
-      docs := docs.push doc
-    return Doc.mkGroup (Doc.concatDocs docs)
-
-  partial def printFun (args : Array Syntax) : PrinterM Doc := do
-    let cfg ← getConfig
-    let indentSize := match cfg.indentStyle with
-      | .spaces n => n
-      | .tabs => 2
-    let mut docs : Array Doc := #[]
-    for arg in args do
-      let doc ← printSyntax arg
-      docs := docs.push doc
-    return Doc.mkGroup (Doc.mkNest indentSize (Doc.concatDocs docs))
-
-  partial def printMatch (args : Array Syntax) : PrinterM Doc := do
-    let mut docs : Array Doc := #[]
-    for arg in args do
-      let doc ← printSyntax arg
-      docs := docs.push doc
-    return Doc.mkGroup (Doc.concatDocs docs)
-
-  partial def printIf (args : Array Syntax) : PrinterM Doc := do
-    let mut docs : Array Doc := #[]
-    for arg in args do
-      let doc ← printSyntax arg
-      docs := docs.push doc
-    return Doc.mkGroup (Doc.concatDocs docs)
-
-  partial def printWhere (args : Array Syntax) : PrinterM Doc := do
-    let cfg ← getConfig
-    let indentSize := match cfg.indentStyle with
-      | .spaces n => n
-      | .tabs => 2
-    let mut docs : Array Doc := #[]
-    for arg in args do
-      let doc ← printSyntax arg
-      docs := docs.push doc
-    return Doc.mkNest indentSize (Doc.concatDocs docs)
 end
 
 def formatSyntax (stx : Syntax) (config : Config.FormatterConfig) (source : String) : Doc := Id.run do
-  let comments := extractComments source
-
-  let ctx : PrinterContext := { config, source, comments }
+  let sourceIndentUnit := detectSourceIndentUnit stx
+  let ctx : PrinterContext := { config, source, sourceIndentUnit }
   let (doc, state) := printSyntax stx |>.run ctx |>.run {}
-
   let tail := String.Pos.Raw.extract source ⟨state.pos⟩ source.rawEndPos
   doc ++ Doc.str tail
 

@@ -7,7 +7,6 @@ namespace Leaner.Formatter
 
 open Lean
 open Leaner.Core
-open Leaner.Core.Comments
 open Leaner.Formatter.Doc
 open Leaner.Formatter.SyntaxPrinter
 
@@ -17,6 +16,25 @@ structure FormatResult where
   isPartial : Bool := false
   diagnostics : Array Diagnostic := #[]
   deriving Inhabited
+
+private def detectRawIndentUnit (source : String) : Nat :=
+  let minFound := source.splitOn "\n" |>.foldl (fun acc line =>
+    let n := line.toList.takeWhile (· == ' ') |>.length
+    let rest := String.ofList (line.toList.dropWhile (· == ' '))
+    if n >= 2 && !rest.isEmpty then min acc n else acc) 1000
+  if minFound >= 1000 then 2 else minFound
+
+private def rescaleSourceIndentation (source : String) (config : Config.FormatterConfig) : String :=
+  let targetUnit := match config.indentStyle with | .spaces n => n | .tabs => 2
+  let sourceUnit := detectRawIndentUnit source
+  if sourceUnit == targetUnit then source
+  else
+    String.intercalate "\n" (source.splitOn "\n" |>.map fun line =>
+      let nSpaces := line.toList.takeWhile (· == ' ') |>.length
+      if nSpaces == 0 then line
+      else
+        let rest := String.ofList (line.toList.dropWhile (· == ' '))
+        "".pushn ' ' (nSpaces / sourceUnit * targetUnit + nSpaces % sourceUnit) ++ rest)
 
 def postProcess (source : String) (config : Config.FormatterConfig) : String := Id.run do
   let mut result := source
@@ -78,8 +96,8 @@ def formatSourceMinimal (source : String) (env : Environment) (fileName : String
     return { output := source, changed := false, diagnostics := diags.toArray }
 
   | .ok _ _ _ _ =>
-    let output := postProcess source config
-
+    let rescaled := rescaleSourceIndentation source config
+    let output := postProcess rescaled config
     return {
       output
       changed := output != source

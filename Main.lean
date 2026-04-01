@@ -7,7 +7,7 @@ open Leaner.Formatter
 open Leaner.Core
 open Leaner.Core.Parser
 
-def version := "0.1.2"
+def version := "0.2.0"
 
 partial def collectLeanFiles (path : System.FilePath) : IO (Array System.FilePath) := do
   if path.components.any (· == ".lake") then
