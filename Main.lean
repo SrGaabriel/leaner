@@ -6,6 +6,7 @@ open Lean
 open Leaner.Formatter
 open Leaner.Core
 open Leaner.Core.Parser
+open Leaner.Weeder
 
 def version := "0.2.0"
 
@@ -87,8 +88,6 @@ def formatHandler (p : Parsed) : IO UInt32 := do
     IO.eprintln "Error: No files specified"
     return 1
 
-  let env ← initParseEnv
-
   let mut hasError := false
   let mut allFiles : Array System.FilePath := #[]
   for file in files do
@@ -98,6 +97,33 @@ def formatHandler (p : Parsed) : IO UInt32 := do
       hasError := true
       continue
     allFiles := allFiles ++ (← collectLeanFiles path)
+
+  let baseEnv ← initParseEnv
+  let env ← (do
+    let mut allImports : Lean.NameSet := {}
+    for path in allFiles do
+      try
+        let source := (← IO.FS.readFile path).replace "\r\n" "\n"
+        let inputCtx := Lean.Parser.mkInputContext source path.toString
+        let (header, _, _) ← Lean.Parser.parseHeader inputCtx
+        for imp in Lean.Elab.headerToImports header do
+          allImports := allImports.insert imp.module
+      catch _ => pure ()
+    if allImports.isEmpty then
+      return baseEnv
+    let importable ← allImports.toArray.filterM fun n => do
+      try
+        let path ← Lean.findOLean n
+        path.pathExists
+      catch _ => pure false
+    if importable.isEmpty then return baseEnv
+    let imports : Array Lean.Import := importable.map ({ module := · })
+    try
+      unsafe Lean.enableInitializersExecution
+      Lean.importModules imports {} (loadExts := true)
+    catch e =>
+      IO.eprintln s!"Warning: failed to load full project env ({e.toString}); falling back to Init-only"
+      return baseEnv) <|> pure baseEnv
 
   let useCache := !check && !diff && !noCache
   let cache ← if useCache then loadMtimeCache else pure RBMap.empty
@@ -132,6 +158,7 @@ def formatHandler (p : Parsed) : IO UInt32 := do
 
         if result.isPartial then
           nPartial := nPartial + 1
+          IO.eprintln s!"Warning: only minimally formatted (parser couldn't fully parse): {file}"
         else if result.changed then
           formatted := formatted + 1
           if check then
@@ -217,6 +244,87 @@ def checkHandler (p : Parsed) : IO UInt32 := do
   if formatted > 0 then return 1
   return 0
 
+private def parseEntryPoints (s : String) : Array Name :=
+  s.splitOn "," |>.toArray.filterMap fun part =>
+    let part := part.trimAscii.toString
+    if part.isEmpty then none
+    else some part.toName
+
+def weedHandler (p : Parsed) : IO UInt32 := do
+  let positional := p.variableArgsAs! String
+  let roots : Array System.FilePath ←
+    if positional.isEmpty then do
+      let cwd ← IO.currentDir
+      pure #[cwd]
+    else
+      pure (positional.map (System.FilePath.mk ·))
+  let entryStr := (p.flag? "entry-points").map (·.as! String) |>.getD ""
+  let extraEntries := parseEntryPoints entryStr
+  let json := p.hasFlag "json"
+
+  let baseConfig ← Config.loadConfigFromCwd
+  let dceCfg := baseConfig.dce
+
+  let cfg : RootConfig := {
+    entryPoints := extraEntries ++ dceCfg.entryPoints.map (·.toName)
+    includeMain := !p.hasFlag "no-main"
+    includeExported := !p.hasFlag "no-exports"
+    includeExtern := !p.hasFlag "no-extern"
+    includeInit := !p.hasFlag "no-init"
+    includeInstances := !p.hasFlag "no-instances"
+    includeSimp := !p.hasFlag "no-simp"
+    includeExt := !p.hasFlag "no-ext"
+    flagTheorems := p.hasFlag "theorems"
+    flagAxioms := p.hasFlag "axioms"
+  }
+
+  for root in roots do
+    if !(← root.pathExists) then
+      IO.eprintln s!"Error: project root not found: {root}"
+      return 1
+
+  let result ← runWeederMulti roots cfg
+
+  if json then
+    let escape (s : String) : String :=
+      s.foldl (init := "") fun acc c =>
+        match c with
+        | '"' => acc ++ "\\\""
+        | '\\' => acc ++ "\\\\"
+        | '\n' => acc ++ "\\n"
+        | _ => acc.push c
+    let entries := result.dead.toList.map fun d =>
+      "    {\"name\":\"" ++ escape d.name.toString ++
+      "\",\"module\":\"" ++ escape d.module.toString ++
+      "\",\"file\":\"" ++ escape d.source.toString ++
+      "\",\"line\":" ++ toString d.range.start.line ++
+      ",\"column\":" ++ toString d.range.start.column ++ "}"
+    IO.println ("{\"summary\":\"" ++ escape result.summary ++ "\",")
+    IO.println " \"dead\":["
+    IO.println (String.intercalate ",\n" entries)
+    IO.println " ]}"
+  else
+    if !result.dead.isEmpty then
+      IO.println result.formatDead
+      IO.println ""
+    IO.println result.summary
+
+  if p.hasFlag "delete" && !result.dead.isEmpty then
+    match result.env?, result.graph?, result.reached? with
+    | some env, some g, some reached =>
+      let (filesChanged, skipped) ← applyDeletions env g reached result.dead
+      let kept := result.dead.size - skipped.size
+      IO.println s!"Deleted {kept} declaration(s) across {filesChanged} file(s)."
+      if !skipped.isEmpty then
+        IO.println s!"Skipped {skipped.size} declaration(s) (referenced by surviving code or in a partially-dead `mutual` block):"
+        for d in skipped do
+          IO.println s!"  {d.source}: `{d.name}`"
+    | _, _, _ =>
+      IO.eprintln "Error: --delete requires the analysis environment/graph, but they were not kept."
+      return 1
+
+  if result.dead.isEmpty then return 0 else return 1
+
 def formatCmd : Cmd := `[Cli|
   format VIA formatHandler; [version]
   "Format Lean 4 source files"
@@ -244,13 +352,36 @@ def checkCmd : Cmd := `[Cli|
     ...files : String;      "Files to check"
 ]
 
+def weedCmd : Cmd := `[Cli|
+  weed VIA weedHandler; [version]
+  "Find unused declarations across an entire Lean 4 project"
+
+  FLAGS:
+    "entry-points" : String;  "Comma-separated additional entry-point declarations"
+    "no-main";                "Do not treat `main` as an entry point"
+    "no-exports";             "Do not treat @[export] declarations as roots"
+    "no-extern";              "Do not treat @[extern] declarations as roots"
+    "no-init";                "Do not treat @[init]/@[builtin_init] declarations as roots"
+    "no-instances";           "Do not treat type-class instances as roots"
+    "no-simp";                "Do not treat @[simp] lemmas as roots"
+    "no-ext";                 "Do not treat @[ext] theorems as roots"
+    t, theorems;              "Also flag unused theorems (off by default — theorems exist for proof, not call)"
+    a, axioms;                "Also flag unused axioms (off by default — axioms are interface stubs)"
+    "delete";                 "DANGEROUS: rewrite each source file in place to remove every dead declaration. Make sure your work is committed first."
+    j, json;                  "Emit JSON output"
+
+  ARGS:
+    ...root : String;         "One or more project root directories (defaults to CWD). To analyse a Lake-required dependency, pass its package directory explicitly, e.g. `weed . .lake/packages/Lib`"
+]
+
 def leanerCmd : Cmd := `[Cli|
   leaner NOOP; [version]
   "Lean 4 code quality tools: formatter, linter, and dead code eliminator"
 
   SUBCOMMANDS:
     formatCmd;
-    checkCmd
+    checkCmd;
+    weedCmd
 ]
 
 def main (args : List String) : IO UInt32 :=

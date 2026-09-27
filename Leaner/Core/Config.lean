@@ -48,7 +48,7 @@ structure FormatterConfig where
   spaceBeforeCloseBracket : Bool := false
   alignDefinitions : Bool := false
   alignMatchArms : Bool := false
-  maxBlankLines : Nat := 2
+  maxBlankLines : Nat := 1
   deriving Inhabited, Repr
 
 structure LinterConfig where

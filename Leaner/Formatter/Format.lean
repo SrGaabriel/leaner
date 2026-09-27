@@ -45,6 +45,19 @@ def postProcess (source : String) (config : Config.FormatterConfig) : String := 
       line.toList.reverse.dropWhile Char.isWhitespace |>.reverse |> String.ofList
     result := "\n".intercalate lines
 
+  let lines := result.splitOn "\n"
+  let mut kept : Array String := #[]
+  let mut blanks : Nat := 0
+  for line in lines do
+    if line.all Char.isWhitespace then
+      if blanks < config.maxBlankLines then
+        kept := kept.push line
+      blanks := blanks + 1
+    else
+      kept := kept.push line
+      blanks := 0
+  result := "\n".intercalate kept.toList
+
   if config.insertFinalNewline && !result.endsWith "\n" then
     result := result ++ "\n"
 
